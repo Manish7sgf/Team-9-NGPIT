@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Portfolio from "./pages/Portfolio";
-import "../src/styles/globals.css";
+import "./styles/globals.css";
 
 /**
  * App root.

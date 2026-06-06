@@ -26,10 +26,11 @@ export default function RepoInput({ onVerify, loading }) {
 
   function handleSubmit(e) {
     e.preventDefault();
-    const err = validate(url);
+    const cleanUrl = url.trim().replace(/\.git$/, "");
+    const err = validate(cleanUrl);
     if (err) { setError(err); return; }
     setError("");
-    onVerify(url.trim());
+    onVerify(cleanUrl);
   }
 
   return (
@@ -71,7 +72,7 @@ export default function RepoInput({ onVerify, loading }) {
           value={url}
           onChange={(e) => {
             setUrl(e.target.value);
-            if (error) setError(validate(e.target.value));
+            if (error) setError(validate(e.target.value.replace(/\.git$/, "")));
           }}
           placeholder="https://github.com/username/repository"
           error={error}

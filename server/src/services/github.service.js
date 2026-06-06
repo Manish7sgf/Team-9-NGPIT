@@ -1,13 +1,18 @@
 /**
  * GitHub API service.
  * Fetches repo metadata, language breakdown, and README in parallel.
- * All calls use GITHUB_TOKEN for authenticated rate limits (5000 req/hr).
+ * Works without GITHUB_TOKEN (60 req/hr unauthenticated).
+ * With GITHUB_TOKEN: 5000 req/hr.
  */
 
-const GITHUB_HEADERS = {
-  Authorization: `token ${process.env.GITHUB_TOKEN}`,
-  Accept: "application/vnd.github.v3+json",
-};
+function getHeaders() {
+  const token = process.env.GITHUB_TOKEN;
+  const headers = { Accept: "application/vnd.github.v3+json" };
+  if (token && token !== "your_personal_github_token") {
+    headers.Authorization = `token ${token}`;
+  }
+  return headers;
+}
 
 export const githubService = {
   /**
@@ -21,11 +26,12 @@ export const githubService = {
    */
   async fetchRepoData(owner, repo) {
     const base = `https://api.github.com/repos/${owner}/${repo}`;
+    const headers = getHeaders();
 
     const [repoRes, languagesRes, readmeRes] = await Promise.allSettled([
-      fetch(base, { headers: GITHUB_HEADERS }),
-      fetch(`${base}/languages`, { headers: GITHUB_HEADERS }),
-      fetch(`${base}/readme`, { headers: GITHUB_HEADERS }),
+      fetch(base, { headers }),
+      fetch(`${base}/languages`, { headers }),
+      fetch(`${base}/readme`, { headers }),
     ]);
 
     // Handle repo fetch — this is the critical one

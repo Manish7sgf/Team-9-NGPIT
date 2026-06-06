@@ -2,32 +2,42 @@ import { portfolioModel } from "../models/portfolio.model.js";
 import { githubService } from "../services/github.service.js";
 import { nvidiaService } from "../services/nvidia.service.js";
 import { scoreService } from "../services/score.service.js";
+import { pool } from "../config/db.js";
 
 // Strict GitHub URL regex
 const GITHUB_URL_REGEX = /^https:\/\/github\.com\/([\w-]+)\/([\w.-]+)\/?$/;
 
+// Fixed demo user ID — created on first request if missing
+const DEMO_USER_ID = "00000000-0000-0000-0000-000000000001";
+
+async function ensureDemoUser() {
+  await pool.query(
+    `INSERT INTO users (id, name, email)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (id) DO NOTHING`,
+    [DEMO_USER_ID, "Demo User", "demo@aifuturepassport.dev"]
+  );
+}
+
 export const portfolioController = {
   /**
    * POST /api/portfolio/verify
-   * 1. Validate GitHub URL
-   * 2. Fetch repo data from GitHub (parallel)
-   * 3. Analyse with Nvidia Nemotron
-   * 4. Save to DB + trigger score recalculation
    */
   async verify(req, res, next) {
     try {
       const { repo_url } = req.body;
-      const userId = req.user.id;
+      const userId = req.user?.id || DEMO_USER_ID;
 
-      // Validate URL
+      await ensureDemoUser();
+
       if (!repo_url || typeof repo_url !== "string") {
-        return res.status(400).json({
-          success: false,
-          error: "repo_url is required",
-        });
+        return res.status(400).json({ success: false, error: "repo_url is required" });
       }
 
-      const match = repo_url.trim().match(GITHUB_URL_REGEX);
+      // Strip trailing .git before validation
+      const cleanUrl = repo_url.trim().replace(/\.git$/, "");
+
+      const match = cleanUrl.match(GITHUB_URL_REGEX);
       if (!match) {
         return res.status(400).json({
           success: false,
@@ -37,8 +47,7 @@ export const portfolioController = {
 
       const [, owner, repo] = match;
 
-      // Check duplicate
-      const exists = await portfolioModel.existsByRepoUrl(userId, repo_url.trim());
+      const exists = await portfolioModel.existsByRepoUrl(userId, cleanUrl);
       if (exists) {
         return res.status(400).json({
           success: false,
@@ -46,23 +55,16 @@ export const portfolioController = {
         });
       }
 
-      // Fetch repo data from GitHub — throws if not found/private
-      const { repoData, languages, readme } = await githubService.fetchRepoData(
-        owner,
-        repo
-      );
+      // Fetch from GitHub
+      const { repoData, languages, readme } = await githubService.fetchRepoData(owner, repo);
 
-      // Analyse with Nvidia Nemotron Nano 9B v2
-      const analysis = await nvidiaService.analyseRepo({
-        repoData,
-        languages,
-        readme,
-      });
+      // Analyse with Nvidia Nemotron
+      const analysis = await nvidiaService.analyseRepo({ repoData, languages, readme });
 
-      // Save to portfolio_items
+      // Save to DB
       const item = await portfolioModel.create({
         userId,
-        repoUrl: repo_url.trim(),
+        repoUrl: cleanUrl,
         title: analysis.title || repoData.name,
         description: analysis.description || repoData.description || "",
         techStack: analysis.tech_stack || [],
@@ -73,14 +75,12 @@ export const portfolioController = {
         skillsDemonstrated: analysis.skills_demonstrated || [],
       });
 
-      // Recalculate score asynchronously (fire and forget — don't block response)
       scoreService.calculateScore(userId).catch((err) =>
         console.error("[Score] Recalculation failed:", err.message)
       );
 
       return res.status(201).json({ success: true, data: item });
     } catch (err) {
-      // Pass known status errors through; wrap unknown ones as 500
       if (err.status) {
         return res.status(err.status).json({ success: false, error: err.message });
       }
@@ -90,11 +90,10 @@ export const portfolioController = {
 
   /**
    * GET /api/portfolio/:userId
-   * Returns all portfolio items for a user.
    */
   async getByUser(req, res, next) {
     try {
-      const { userId } = req.params;
+      const userId = req.params.userId === "demo" ? DEMO_USER_ID : req.params.userId;
       const items = await portfolioModel.findByUserId(userId);
       return res.json({ success: true, data: items });
     } catch (err) {
@@ -104,23 +103,17 @@ export const portfolioController = {
 
   /**
    * DELETE /api/portfolio/:id
-   * Removes a portfolio item and triggers score recalculation.
    */
   async remove(req, res, next) {
     try {
       const { id } = req.params;
-      const userId = req.user.id;
+      const userId = req.user?.id || DEMO_USER_ID;
 
       const deleted = await portfolioModel.deleteById(id);
-
       if (!deleted) {
-        return res.status(404).json({
-          success: false,
-          error: "Portfolio item not found.",
-        });
+        return res.status(404).json({ success: false, error: "Portfolio item not found." });
       }
 
-      // Recalculate score after removal
       scoreService.calculateScore(userId).catch((err) =>
         console.error("[Score] Recalculation failed:", err.message)
       );
